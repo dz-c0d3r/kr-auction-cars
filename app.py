@@ -1,6 +1,7 @@
 import math
 import json
 import urllib.request
+import urllib.error
 import streamlit as st
 
 st.set_page_config(page_title="KR Auction Cars", page_icon="🇰🇷", layout="centered")
@@ -107,6 +108,76 @@ def get_upbit_usdt_krw():
     except Exception:
         return None
     return None
+
+
+@st.cache_data(ttl=60)
+def get_binance_p2p_usdt_dzd(amount_usdt=0.0):
+    """
+    Binance P2P benchmark for selling USDT and receiving DZD.
+    Returns the LOWEST compatible listed price, per user preference.
+    This endpoint is public but unofficial/undocumented and can change.
+    """
+    try:
+        payload = {
+            "page": 1,
+            "rows": 20,
+            "payTypes": [],
+            "countries": [],
+            "publisherType": None,
+            "asset": "USDT",
+            "fiat": "DZD",
+            "tradeType": "SELL",
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search",
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 KR-Auction-Cars/1.0",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        ads = []
+        for item in data.get("data", []):
+            adv = item.get("adv", {})
+            try:
+                price = float(adv.get("price", 0))
+                min_dzd = float(adv.get("minSingleTransAmount", 0) or 0)
+                max_dzd = float(adv.get("maxSingleTransAmount", 0) or 0)
+                available_usdt = float(adv.get("surplusAmount", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+
+            if price <= 0:
+                continue
+
+            if amount_usdt and amount_usdt > 0:
+                order_dzd = amount_usdt * price
+                if min_dzd and order_dzd < min_dzd:
+                    continue
+                if max_dzd and order_dzd > max_dzd:
+                    continue
+                if available_usdt and amount_usdt > available_usdt:
+                    continue
+
+            ads.append({
+                "price": price,
+                "min_dzd": min_dzd,
+                "max_dzd": max_dzd,
+                "available_usdt": available_usdt,
+            })
+
+        if not ads:
+            return None
+
+        return min(ads, key=lambda x: x["price"])
+    except Exception:
+        return None
 
 
 def calc_commission(price, kind, rate, min_fee, max_fee):
@@ -225,6 +296,39 @@ with st.sidebar:
     usd_per_eur = st.number_input("USD pour 1 EUR", min_value=0.01, value=1.18, step=0.01)
 
 
+    st.divider()
+    st.subheader("🇩🇿 Binance P2P — USDT → DZD")
+    st.caption(
+        "Référence : annonces SELL USDT / DZD. L'app prend volontairement le prix compatible le plus bas, "
+        "comme demandé. Pour vendre des USDT, un prix plus élevé serait normalement plus avantageux."
+    )
+
+    binance_manual = st.toggle("Saisir le taux Binance P2P manuellement", value=False)
+    if binance_manual:
+        dzd_per_usdt = st.number_input(
+            "DZD pour 1 USDT",
+            min_value=1.0,
+            value=250.0,
+            step=1.0,
+            key="dzd_usdt_manual",
+        )
+        binance_ad = None
+    else:
+        binance_ad = get_binance_p2p_usdt_dzd(0.0)
+        if binance_ad:
+            dzd_per_usdt = binance_ad["price"]
+            st.success(f"Binance P2P lowest : 1 USDT ≈ {dzd_per_usdt:,.2f} DZD")
+        else:
+            st.warning("Binance P2P indisponible depuis Streamlit — fallback manuel.")
+            dzd_per_usdt = st.number_input(
+                "DZD pour 1 USDT",
+                min_value=1.0,
+                value=250.0,
+                step=1.0,
+                key="dzd_usdt_fallback",
+            )
+
+
 tab1, tab2, tab3 = st.tabs(["💶 Coût total", "🎯 Budget max", "ℹ️ Guide Corée"])
 
 with tab1:
@@ -248,13 +352,51 @@ with tab1:
     st.subheader("Export")
     export_mode = st.toggle("Ajouter les coûts export", value=True)
     if export_mode:
-        export_handling = st.number_input("Frais export / agent / radiation (KRW)", min_value=0.0, value=0.0, step=10_000.0)
-        port = st.number_input("Port / terminal / handling (KRW)", min_value=0.0, value=0.0, step=10_000.0)
-        shipping = st.number_input("Fret maritime (KRW)", min_value=0.0, value=0.0, step=50_000.0)
-        docs_usd = st.number_input("Documents export optionnels (USD)", min_value=0.0, value=0.0, step=100.0)
+        vehicle_type = st.selectbox(
+            "Type de véhicule pour le RoRo",
+            ["Berline / Sedan", "SUV / Crossover", "Grand SUV / 7 places", "Van / MPV", "Personnalisé"],
+            index=0,
+        )
+
+        shipping_defaults = {
+            "Berline / Sedan": 0.0,
+            "SUV / Crossover": 0.0,
+            "Grand SUV / 7 places": 0.0,
+            "Van / MPV": 0.0,
+            "Personnalisé": 0.0,
+        }
+
+        shipping_usdt = st.number_input(
+            "RoRo shipping (USDT)",
+            min_value=0.0,
+            value=float(shipping_defaults[vehicle_type]),
+            step=50.0,
+            help="Tarif du devis RoRo. Le montant reste modifiable car le transporteur peut réviser ses prix.",
+        )
+
+        paperwork_usdt = st.number_input(
+            "Paperasse export + acheminement jusqu'au port (USDT)",
+            min_value=0.0,
+            value=500.0,
+            step=50.0,
+            help="Forfait communiqué : 500 USDT.",
+        )
+
+        shipping = shipping_usdt * krw_per_usdt
+        export_handling = paperwork_usdt * krw_per_usdt
+
+        st.caption(
+            f"RoRo : {shipping_usdt:,.0f} USDT ≈ {krw(shipping)} · "
+            f"Paperasse/port : {paperwork_usdt:,.0f} USDT ≈ {krw(export_handling)}"
+        )
+
+        port = st.number_input("Autres frais port / terminal (KRW)", min_value=0.0, value=0.0, step=10_000.0)
+        docs_usd = st.number_input("Documents export optionnels supplémentaires (USD)", min_value=0.0, value=0.0, step=100.0)
         docs = docs_usd / usd_per_eur * krw_per_eur
         other = st.number_input("Autres coûts Corée (KRW)", min_value=0.0, value=0.0, step=10_000.0)
     else:
+        vehicle_type = "N/A"
+        shipping_usdt = paperwork_usdt = 0.0
         export_handling = port = shipping = docs = other = 0.0
 
     gotcha_service_krw = (service_usd / usd_per_eur * krw_per_eur) if profile.startswith("GOTCHA") else 0.0
@@ -275,9 +417,21 @@ with tab1:
     c1.metric("Prix voiture", krw(price))
     c2.metric("Frais Corée", krw(grand_total - price))
     c3.metric("TOTAL", krw(grand_total))
-    e1, e2 = st.columns(2)
+    total_usdt = grand_total / krw_per_usdt
+    compatible_binance = None if binance_manual else get_binance_p2p_usdt_dzd(total_usdt)
+    effective_dzd_rate = compatible_binance["price"] if compatible_binance else dzd_per_usdt
+    total_dzd = total_usdt * effective_dzd_rate
+
+    e1, e2, e3 = st.columns(3)
     e1.metric("Équivalent EUR", eur(grand_total / krw_per_eur))
-    e2.metric("À financer en USDT", f"{grand_total / krw_per_usdt:,.2f} USDT")
+    e2.metric("À financer en USDT", f"{total_usdt:,.2f} USDT")
+    e3.metric("Équivalent DZD", f"{total_dzd:,.0f} DZD")
+
+    if compatible_binance and not binance_manual:
+        st.caption(
+            f"Binance P2P : taux le plus bas compatible avec ~{total_usdt:,.0f} USDT = "
+            f"{effective_dzd_rate:,.2f} DZD/USDT."
+        )
 
     st.subheader("Détail")
     rows = [
@@ -305,13 +459,16 @@ with tab1:
         st.info(f"Caution membre à immobiliser : **{krw(membership_deposit)}** — elle n'est pas ajoutée au coût du véhicule car elle est normalement remboursable/maintenue sur le compte.")
 
 with tab2:
-    budget_currency = st.selectbox("Devise du budget", ["EUR", "USDT"], index=1)
+    budget_currency = st.selectbox("Devise du budget", ["EUR", "USDT", "DZD"], index=1)
     if budget_currency == "EUR":
         budget_value = st.number_input("Budget total maximum (EUR)", min_value=0.0, value=15_000.0, step=500.0)
         budget_krw = budget_value * krw_per_eur
-    else:
+    elif budget_currency == "USDT":
         budget_value = st.number_input("Budget total maximum (USDT)", min_value=0.0, value=15_000.0, step=500.0)
         budget_krw = budget_value * krw_per_usdt
+    else:
+        budget_value = st.number_input("Budget total maximum (DZD)", min_value=0.0, value=4_000_000.0, step=100_000.0)
+        budget_krw = (budget_value / dzd_per_usdt) * krw_per_usdt
 
     extras = st.number_input("Réserve frais fixes/export hors prix véhicule (KRW)", min_value=0.0, value=1_000_000.0, step=100_000.0)
 
@@ -351,6 +508,7 @@ with tab3:
 
 ### FX / USDT
 - **Upbit** est utilisé comme benchmark live pour USDT/KRW.
+- **Binance P2P** est utilisé comme benchmark USDT/DZD. L'app prend le prix SELL compatible le plus bas, conformément au choix de l'utilisateur, avec fallback manuel si Binance bloque l'accès serveur.
 - Un **bureau de change classique** de Séoul donne surtout un taux cash USD/EUR/KRW : ce n'est pas directement le même marché.
 - Pour un desk **OTC crypto**, utilise le taux net KRW réellement reçu par USDT et compare-le à Upbit.
 - L'app affiche automatiquement l'écart en % par rapport à Upbit quand tu saisis un taux OTC manuel.
