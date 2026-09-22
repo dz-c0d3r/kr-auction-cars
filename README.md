@@ -40,3 +40,13 @@ URL cible : https://kr-auction-cars.streamlit.app
 Les marketplaces coréennes n'ont pas toutes une commission acheteur unique. Encar et KB ChaChaCha affichent des véhicules de vendeurs/dealers dont les frais de gestion peuvent varier. Les enchères B2B comme Hyundai Glovis et Lotte ont des barèmes plus structurés. GOTCHA donne aux acheteurs internationaux un accès agrégé à plusieurs maisons d'enchères coréennes.
 
 Les conditions de la plateforme, du vendeur et de l'exportateur font toujours foi.
+
+
+## FX et export Algérie
+
+- Upbit live comme benchmark USDT/KRW.
+- Binance P2P comme benchmark USDT/DZD, en prenant le prix SELL compatible le plus bas demandé par l'utilisateur.
+- Affichage du coût total en KRW, EUR, USDT et DZD.
+- Budget maximum possible en EUR, USDT ou DZD.
+- Forfait export prérempli à 500 USDT pour paperasse + acheminement jusqu'au port.
+- Sélection du type de véhicule pour le fret RoRo, avec tarif USDT modifiable selon le devis du transporteur.
