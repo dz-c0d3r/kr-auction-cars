@@ -1,4 +1,6 @@
 import math
+import json
+import urllib.request
 import streamlit as st
 
 st.set_page_config(page_title="KR Auction Cars", page_icon="🇰🇷", layout="centered")
@@ -90,6 +92,23 @@ def eur(v):
     return f"€ {v:,.2f}".replace(",", " ")
 
 
+@st.cache_data(ttl=60)
+def get_upbit_usdt_krw():
+    """Public Upbit ticker. Returns KRW per 1 USDT or None."""
+    try:
+        req = urllib.request.Request(
+            "https://api.upbit.com/v1/ticker?markets=KRW-USDT",
+            headers={"User-Agent": "KR-Auction-Cars/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        if data and "trade_price" in data[0]:
+            return float(data[0]["trade_price"])
+    except Exception:
+        return None
+    return None
+
+
 def calc_commission(price, kind, rate, min_fee, max_fee):
     if kind in ("retail",):
         return 0.0
@@ -145,8 +164,64 @@ with st.sidebar:
 
 
     st.divider()
-    st.subheader("Conversion")
-    krw_per_eur = st.number_input("KRW pour 1 EUR", min_value=1.0, value=1650.0, step=10.0, help="Taux modifiable manuellement.")
+    st.subheader("💱 FX / financement")
+
+    upbit_live = get_upbit_usdt_krw()
+    fx_source = st.selectbox(
+        "Référence USDT → KRW",
+        ["Upbit live", "OTC / bureau crypto Séoul (manuel)", "Taux personnalisé"],
+        index=0,
+    )
+
+    if fx_source == "Upbit live":
+        if upbit_live:
+            st.success(f"Upbit live : 1 USDT ≈ {upbit_live:,.0f} KRW")
+            usdt_krw_raw = upbit_live
+        else:
+            st.warning("Cours Upbit indisponible momentanément — utilise un taux manuel.")
+            usdt_krw_raw = st.number_input(
+                "KRW pour 1 USDT",
+                min_value=1.0,
+                value=1350.0,
+                step=1.0,
+                key="upbit_fallback",
+            )
+
+        upbit_fee_pct = st.number_input(
+            "Frais de vente Upbit (%)",
+            min_value=0.0,
+            max_value=5.0,
+            value=0.05,
+            step=0.01,
+            help="Le taux KRW market publié par Upbit est actuellement 0,05 % pour les ordres standards.",
+        )
+        krw_per_usdt = usdt_krw_raw * (1 - upbit_fee_pct / 100.0)
+        st.caption(f"Taux net estimé après frais : 1 USDT ≈ {krw_per_usdt:,.2f} KRW")
+    else:
+        manual_default = float(upbit_live or 1350.0)
+        krw_per_usdt = st.number_input(
+            "Taux net proposé : KRW reçus pour 1 USDT",
+            min_value=1.0,
+            value=manual_default,
+            step=1.0,
+            help="Entre le taux NET réellement proposé après spread/commission par le desk OTC ou bureau crypto.",
+        )
+        if upbit_live:
+            spread_vs_upbit = (krw_per_usdt / upbit_live - 1) * 100
+            st.caption(f"Écart vs Upbit live : {spread_vs_upbit:+.2f} %")
+
+    st.caption(
+        "⚠️ Un bureau de change classique de Myeongdong échange surtout des devises cash (USD/EUR ↔ KRW), "
+        "pas de l'USDT. Pour USDT → KRW, compare le taux net d'un desk OTC/crypto avec Upbit."
+    )
+
+    krw_per_eur = st.number_input(
+        "KRW pour 1 EUR (référence séparée)",
+        min_value=1.0,
+        value=1555.0,
+        step=5.0,
+        help="Utilisé uniquement pour l'affichage EUR et le budget en EUR.",
+    )
     usd_per_eur = st.number_input("USD pour 1 EUR", min_value=0.01, value=1.18, step=0.01)
 
 
@@ -200,7 +275,9 @@ with tab1:
     c1.metric("Prix voiture", krw(price))
     c2.metric("Frais Corée", krw(grand_total - price))
     c3.metric("TOTAL", krw(grand_total))
-    st.metric("Équivalent EUR", eur(grand_total / krw_per_eur))
+    e1, e2 = st.columns(2)
+    e1.metric("Équivalent EUR", eur(grand_total / krw_per_eur))
+    e2.metric("À financer en USDT", f"{grand_total / krw_per_usdt:,.2f} USDT")
 
     st.subheader("Détail")
     rows = [
@@ -228,8 +305,13 @@ with tab1:
         st.info(f"Caution membre à immobiliser : **{krw(membership_deposit)}** — elle n'est pas ajoutée au coût du véhicule car elle est normalement remboursable/maintenue sur le compte.")
 
 with tab2:
-    budget_eur = st.number_input("Budget total maximum (EUR)", min_value=0.0, value=15_000.0, step=500.0)
-    budget_krw = budget_eur * krw_per_eur
+    budget_currency = st.selectbox("Devise du budget", ["EUR", "USDT"], index=1)
+    if budget_currency == "EUR":
+        budget_value = st.number_input("Budget total maximum (EUR)", min_value=0.0, value=15_000.0, step=500.0)
+        budget_krw = budget_value * krw_per_eur
+    else:
+        budget_value = st.number_input("Budget total maximum (USDT)", min_value=0.0, value=15_000.0, step=500.0)
+        budget_krw = budget_value * krw_per_usdt
 
     extras = st.number_input("Réserve frais fixes/export hors prix véhicule (KRW)", min_value=0.0, value=1_000_000.0, step=100_000.0)
 
@@ -244,7 +326,10 @@ with tab2:
             high = mid
 
     st.metric("Prix voiture maximum estimé", krw(low))
-    st.caption(f"≈ {eur(low / krw_per_eur)} pour la voiture, avec {krw(extras)} de réserve frais.")
+    st.caption(
+        f"≈ {eur(low / krw_per_eur)} / {low / krw_per_usdt:,.2f} USDT pour la voiture, "
+        f"avec {krw(extras)} de réserve frais."
+    )
 
 with tab3:
     st.markdown("""
@@ -263,6 +348,12 @@ with tab3:
 **Export international**
 - **Autowini** : achat + export + shipping ; frais logistiques variables selon la voiture et la destination.
 - **GOTCHA** : agrégateur international donnant accès à Glovis, AJ, K Car Auction, Lotte et SK, avec frais de service publics selon le plan.
+
+### FX / USDT
+- **Upbit** est utilisé comme benchmark live pour USDT/KRW.
+- Un **bureau de change classique** de Séoul donne surtout un taux cash USD/EUR/KRW : ce n'est pas directement le même marché.
+- Pour un desk **OTC crypto**, utilise le taux net KRW réellement reçu par USDT et compare-le à Upbit.
+- L'app affiche automatiquement l'écart en % par rapport à Upbit quand tu saisis un taux OTC manuel.
 
 ### À retenir pour un export
 Si la voiture est achetée directement pour export et radiée en Corée, ne traite pas automatiquement les **7 % de taxe d'acquisition** comme un coût certain. Le montage dépend de l'acheteur/importateur/exportateur et de la façon dont le véhicule est transféré/radié. C'est pourquoi l'app laisse cette taxe désactivée par défaut en mode export direct.
