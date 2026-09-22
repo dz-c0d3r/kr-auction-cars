@@ -52,6 +52,27 @@ PROFILES = {
         "membership_deposit": 0, "annual_fee": 0,
         "note": "Plateforme export. Les frais de véhicule/shipping varient selon le lot et la destination. Documents optionnels publics : 100 USD par document (certificat export anglais, origine, historique, etc.)."
     },
+    "GOTCHA — Bronze": {
+        "kind": "auction", "rate": 2.2, "min_fee": 0, "max_fee": 0,
+        "fixed_fee": 0, "management": 0, "performance": 0,
+        "membership_deposit": 0, "annual_fee": 0,
+        "service_usd": 250, "deposit_usd": 5000,
+        "note": "Accès international aux enchères Glovis, AJ, K Car, Lotte et SK. Service Bronze : 250 USD/voiture, dépôt remboursable 5 000 USD. L'enchère maison (environ 2,2–2,585 %) et le fret maritime restent séparés."
+    },
+    "GOTCHA — Silver": {
+        "kind": "auction", "rate": 2.2, "min_fee": 0, "max_fee": 0,
+        "fixed_fee": 0, "management": 0, "performance": 0,
+        "membership_deposit": 0, "annual_fee": 0,
+        "service_usd": 180, "deposit_usd": 7500,
+        "note": "Service Silver : 180 USD/voiture, dépôt remboursable 7 500 USD. Accès agrégé aux principales enchères coréennes."
+    },
+    "GOTCHA — Gold": {
+        "kind": "auction", "rate": 2.2, "min_fee": 0, "max_fee": 0,
+        "fixed_fee": 0, "management": 0, "performance": 0,
+        "membership_deposit": 0, "annual_fee": 0,
+        "service_usd": 80, "deposit_usd": 10000,
+        "note": "Service Gold : 80 USD/voiture, dépôt remboursable 10 000 USD. Live bidding illimité selon le plan publié."
+    },
     "Personnalisé": {
         "kind": "auction", "rate": 0, "min_fee": 0, "max_fee": 0,
         "fixed_fee": 0, "management": 0, "performance": 0,
@@ -104,6 +125,12 @@ with st.sidebar:
     min_fee = st.number_input("Commission minimum (KRW)", min_value=0.0, value=float(p["min_fee"]), step=10_000.0)
     max_fee = st.number_input("Commission maximum (KRW, 0 = aucun)", min_value=0.0, value=float(p["max_fee"]), step=10_000.0)
     fixed_fee = st.number_input("Frais fixes plateforme (KRW)", min_value=0.0, value=float(p["fixed_fee"]), step=10_000.0)
+
+    service_usd = float(p.get("service_usd", 0))
+    deposit_usd = float(p.get("deposit_usd", 0))
+    if profile.startswith("GOTCHA"):
+        st.caption(f"Service GOTCHA publié : {service_usd:.0f} USD / voiture")
+
     management = st.number_input("매도비 / frais de gestion dealer (KRW)", min_value=0.0, value=float(p["management"]), step=10_000.0)
     performance = st.number_input("Assurance / garantie performance (KRW)", min_value=0.0, value=float(p["performance"]), step=10_000.0)
 
@@ -112,6 +139,10 @@ with st.sidebar:
     membership_deposit = st.number_input("Dépôt / caution (KRW, non inclus dans le véhicule)", min_value=0.0, value=float(p["membership_deposit"]), step=100_000.0)
     annual_fee = st.number_input("Cotisation annuelle (KRW, optionnel dans le calcul)", min_value=0.0, value=float(p["annual_fee"]), step=10_000.0)
     include_annual = st.toggle("Inclure la cotisation annuelle dans ce véhicule", value=False)
+
+    if profile.startswith("GOTCHA"):
+        st.info(f"Dépôt GOTCHA remboursable : {deposit_usd:,.0f} USD — non inclus dans le coût du véhicule.")
+
 
     st.divider()
     st.subheader("Conversion")
@@ -151,10 +182,12 @@ with tab1:
     else:
         export_handling = port = shipping = docs = other = 0.0
 
+    gotcha_service_krw = (service_usd / usd_per_eur * krw_per_eur) if profile.startswith("GOTCHA") else 0.0
+
     if include_annual:
-        fixed_for_vehicle = fixed_fee + annual_fee
+        fixed_for_vehicle = fixed_fee + annual_fee + gotcha_service_krw
     else:
-        fixed_for_vehicle = fixed_fee
+        fixed_for_vehicle = fixed_fee + gotcha_service_krw
 
     platform_total, local_total, grand_total = total_cost(
         price, commission, fixed_for_vehicle, management, performance,
@@ -173,7 +206,7 @@ with tab1:
     rows = [
         ("Prix véhicule", price),
         ("Commission acheteur", commission),
-        ("Frais fixes plateforme", fixed_for_vehicle),
+        ("Frais fixes plateforme / service", fixed_for_vehicle),
         ("매도비 / gestion dealer", management),
         ("Assurance performance", performance),
         ("Taxe d'acquisition", acquisition_tax),
@@ -225,9 +258,11 @@ with tab3:
 **Enchères professionnelles**
 - **Hyundai Glovis Autobell Smart Auction** : réservé aux professionnels du commerce automobile.
 - **Lotte Auto Auction** : réservé aux entreprises automobiles ou exportateurs enregistrés.
+- L'association coréenne des maisons d'enchères recense aussi **AutoHub Auction, K Car Auction, SK Rent Car Auction, AutoInside, Car Auction**, entre autres. Leurs barèmes acheteurs n'étant pas tous publiés clairement, ils ne sont pas préremplis tant qu'un tarif fiable n'est pas disponible.
 
 **Export international**
 - **Autowini** : achat + export + shipping ; frais logistiques variables selon la voiture et la destination.
+- **GOTCHA** : agrégateur international donnant accès à Glovis, AJ, K Car Auction, Lotte et SK, avec frais de service publics selon le plan.
 
 ### À retenir pour un export
 Si la voiture est achetée directement pour export et radiée en Corée, ne traite pas automatiquement les **7 % de taxe d'acquisition** comme un coût certain. Le montage dépend de l'acheteur/importateur/exportateur et de la façon dont le véhicule est transféré/radié. C'est pourquoi l'app laisse cette taxe désactivée par défaut en mode export direct.
