@@ -28,21 +28,21 @@ PROFILES = {
     },
     "Encar — annonce vendeur / dealer": {
         "kind": "retail", "rate": 0, "min_fee": 0, "max_fee": 0,
-        "fixed_fee": 0, "management": 400_000, "performance": 150_000,
+        "fixed_fee": 0, "management": 0, "performance": 0,
         "membership_deposit": 0, "annual_fee": 0,
-        "note": "Marketplace : pas de commission acheteur Encar unique. Encar indique typiquement ~350–450k KRW de 매도비 (gestion/stockage) et une assurance performance souvent ~100–200k KRW sur véhicules coréens, davantage sur imports. Valeurs ci-dessous modifiables."
+        "note": "EXPORT ALGÉRIE : commission acheteur Encar = 0 sur une annonce standard. Le contrat est conclu avec le vendeur/dealer. Les frais dealer (매도비, souvent ~350–450k KRW en retail Corée) et l'assurance performance (~100–200k KRW typiquement sur une voiture coréenne) ne sont PAS des commissions Encar et peuvent varier. Ils restent à 0 par défaut ici : entre uniquement les montants réellement facturés sur le devis export. Encar 믿고 est optionnel (88k–220k KRW) et n'est pas inclus."
     },
     "KB ChaChaCha — annonce vendeur / dealer": {
         "kind": "retail", "rate": 0, "min_fee": 0, "max_fee": 0,
-        "fixed_fee": 0, "management": 440_000, "performance": 150_000,
+        "fixed_fee": 0, "management": 0, "performance": 0,
         "membership_deposit": 0, "annual_fee": 0,
-        "note": "Marketplace : KB précise que 매도관리비 et autres frais dépendent de la politique du vendeur. Des annonces actuelles affichent par exemple 440k KRW de management + assurance performance. Valeurs modifiables."
+        "note": "EXPORT ALGÉRIE : KB ChaChaCha est une marketplace ; pas de commission acheteur KB fixe ajoutée automatiquement. Les frais proviennent du dealer. Des annonces récentes affichent 440k KRW de frais de gestion et une assurance performance variable, mais ce n'est pas universel. Pour un achat export, entre uniquement les frais confirmés par le vendeur/exportateur."
     },
     "K Car — véhicule direct": {
         "kind": "retail", "rate": 0, "min_fee": 0, "max_fee": 0,
         "fixed_fee": 0, "management": 0, "performance": 0,
         "membership_deposit": 0, "annual_fee": 0,
-        "note": "Vente directe K Car. Le calculateur K Car sépare prix véhicule, frais de transfert/immatriculation, frais de gestion et livraison. Il n'y a pas de commission d'enchère standard à ajouter."
+        "note": "K Car vend directement son propre stock : pas de commission d'enchère acheteur séparée. La marge commerciale de K Car est déjà incorporée au prix affiché. Pour l'export, n'ajoute que les frais explicitement facturés."
     },
     "K Car — marché direct sécurisé": {
         "kind": "percent", "rate": 0.5, "min_fee": 0, "max_fee": 0,
@@ -385,8 +385,28 @@ with st.sidebar:
     if profile.startswith("GOTCHA"):
         st.caption(f"Service GOTCHA publié : {service_usd:.0f} USD / voiture")
 
-    management = st.number_input("매도비 / frais de gestion dealer (KRW)", min_value=0.0, value=float(p["management"]), step=10_000.0)
-    performance = st.number_input("Assurance / garantie performance (KRW)", min_value=0.0, value=float(p["performance"]), step=10_000.0)
+    management = st.number_input(
+        "매도비 / frais dealer réellement facturés (KRW)",
+        min_value=0.0,
+        value=float(p["management"]),
+        step=10_000.0,
+        help="Ce n'est pas une commission de la marketplace. Pour Encar/KB en export, saisis uniquement ce que le vendeur te facture réellement."
+    )
+    performance = st.number_input(
+        "Assurance performance réellement facturée (KRW)",
+        min_value=0.0,
+        value=float(p["performance"]),
+        step=10_000.0,
+        help="Variable selon véhicule et type de transaction. Laisse 0 si elle n'apparaît pas sur le devis export."
+    )
+
+    if profile.startswith("Encar"):
+        with st.expander("ℹ️ Frais retail indicatifs Encar"):
+            st.write("• Commission Encar sur annonce standard : 0 KRW")
+            st.write("• 매도비 dealer observé / indiqué par Encar : ~350 000 à 450 000 KRW")
+            st.write("• Assurance performance voiture coréenne : ~100 000 à 200 000 KRW")
+            st.write("• Encar 믿고 (optionnel) : 88 000 à 220 000 KRW")
+            st.caption("Pour l'export, ne les ajoute que s'ils figurent réellement sur le devis du vendeur/exportateur.")
 
     st.divider()
     st.subheader("Compte professionnel")
