@@ -2,6 +2,7 @@ import math
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 import streamlit as st
 
 st.set_page_config(page_title="KR Auction Cars", page_icon="🇰🇷", layout="centered")
@@ -111,83 +112,236 @@ def get_upbit_usdt_krw():
 
 
 @st.cache_data(ttl=60)
-def get_binance_p2p_usdt_dzd(amount_usdt=0.0):
+def get_binance_dzd_payment_method():
     """
-    Binance P2P benchmark for BUYING USDT with DZD.
-    Returns the LOWEST compatible seller price.
-    The public web endpoint is unofficial/undocumented and can change.
+    Discover Binance's current payment-method identifier for Algeria Poste CCP.
+    This avoids hardcoding an identifier that Binance may rename.
     """
     try:
-        ads = []
-        for page in range(1, 4):
-            payload = {
-                "page": page,
-                "rows": 20,
-                "payTypes": [],
-                "countries": [],
-                "publisherType": None,
-                "asset": "USDT",
-                "fiat": "DZD",
-                "tradeType": "BUY",
-            }
-            body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search",
-                data=body,
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 KR-Auction-Cars/1.0",
-                    "Accept": "application/json",
-                },
+        url = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/trade-methods?fiat=DZD"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 KR-Auction-Cars/1.0",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        data = payload.get("data", payload)
+        if isinstance(data, dict):
+            candidates = (
+                data.get("tradeMethods")
+                or data.get("paymentMethods")
+                or data.get("list")
+                or []
             )
-            with urllib.request.urlopen(req, timeout=8) as response:
-                data = json.loads(response.read().decode("utf-8"))
+        elif isinstance(data, list):
+            candidates = data
+        else:
+            candidates = []
 
-            page_items = data.get("data", [])
-            if not page_items:
-                break
+        best = None
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            identifier = str(
+                item.get("identifier")
+                or item.get("tradeMethodIdentifier")
+                or item.get("code")
+                or ""
+            )
+            name = str(
+                item.get("tradeMethodName")
+                or item.get("name")
+                or item.get("paymentMethodName")
+                or ""
+            )
+            haystack = (identifier + " " + name).lower()
+            score = sum(token in haystack for token in ("algeria", "poste", "ccp"))
+            if score >= 2:
+                best = {
+                    "identifier": identifier or "AlgeriaPosteCCP",
+                    "name": name or "Algeria Poste CCP",
+                }
+                if score == 3:
+                    break
 
-            for item in page_items:
-                adv = item.get("adv", {})
-                advertiser = item.get("advertiser", {})
-                try:
-                    price = float(adv.get("price", 0))
-                    min_dzd = float(adv.get("minSingleTransAmount", 0) or 0)
-                    max_dzd = float(adv.get("maxSingleTransAmount", 0) or 0)
-                    available_usdt = float(adv.get("surplusAmount", 0) or 0)
-                    month_orders = int(advertiser.get("monthOrderCount", 0) or 0)
-                    month_finish_rate = float(advertiser.get("monthFinishRate", 0) or 0)
-                except (TypeError, ValueError):
-                    continue
-
-                if price <= 0:
-                    continue
-
-                if amount_usdt and amount_usdt > 0:
-                    order_dzd = amount_usdt * price
-                    if min_dzd and order_dzd < min_dzd:
-                        continue
-                    if max_dzd and order_dzd > max_dzd:
-                        continue
-                    if available_usdt and amount_usdt > available_usdt:
-                        continue
-
-                ads.append({
-                    "price": price,
-                    "min_dzd": min_dzd,
-                    "max_dzd": max_dzd,
-                    "available_usdt": available_usdt,
-                    "month_orders": month_orders,
-                    "month_finish_rate": month_finish_rate,
-                })
-
-        if not ads:
-            return None
-
-        return min(ads, key=lambda x: x["price"])
+        return best or {
+            "identifier": "AlgeriaPosteCCP",
+            "name": "Algeria Poste CCP",
+        }
     except Exception:
+        return {
+            "identifier": "AlgeriaPosteCCP",
+            "name": "Algeria Poste CCP",
+        }
+
+
+def _normalize_binance_agent_ad(item):
+    """Normalize both Binance agent API and legacy friendly API ad shapes."""
+    if not isinstance(item, dict):
         return None
+
+    adv = item.get("adv", item)
+    advertiser = item.get("advertiser", {})
+
+    def num(*keys):
+        for key in keys:
+            value = adv.get(key)
+            if value not in (None, ""):
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    pass
+        return 0.0
+
+    price = num("price", "advPrice")
+    if price <= 0:
+        return None
+
+    return {
+        "price": price,
+        "min_dzd": num("minSingleTransAmount", "minAmount", "minFiatAmount"),
+        "max_dzd": num("maxSingleTransAmount", "maxAmount", "maxFiatAmount"),
+        "available_usdt": num("surplusAmount", "availableAmount", "tradableQuantity"),
+        "month_orders": int(float(advertiser.get("monthOrderCount", 0) or 0)),
+        "month_finish_rate": float(advertiser.get("monthFinishRate", 0) or 0),
+    }
+
+
+@st.cache_data(ttl=30)
+def get_binance_p2p_usdt_dzd(amount_usdt=0.0):
+    """
+    Dynamic Binance P2P BUY USDT/DZD quote for Algeria Poste CCP.
+
+    Returns:
+      - market_lowest: cheapest visible Algeria Poste CCP ad right now
+      - compatible_lowest: cheapest ad compatible with amount_usdt, if any
+      - payment_method: Binance payment-method metadata
+      - count: number of valid ads inspected
+    """
+    payment = get_binance_dzd_payment_method()
+    identifier = payment["identifier"]
+    ads = []
+
+    # Preferred public Binance Agent endpoint.
+    try:
+        params = urllib.parse.urlencode({
+            "fiat": "DZD",
+            "asset": "USDT",
+            "tradeType": "BUY",
+            "limit": 20,
+            "order": "asc",
+            "tradeMethodIdentifiers": identifier,
+        })
+        url = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/ad-list?" + params
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 KR-Auction-Cars/1.0",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        data = payload.get("data", payload)
+        if isinstance(data, dict):
+            items = data.get("ads") or data.get("list") or data.get("data") or []
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+
+        for item in items:
+            ad = _normalize_binance_agent_ad(item)
+            if ad:
+                ads.append(ad)
+    except Exception:
+        pass
+
+    # Fallback to the legacy public P2P web endpoint used by Binance's website.
+    if not ads:
+        try:
+            for page in range(1, 4):
+                payload = {
+                    "page": page,
+                    "rows": 20,
+                    "payTypes": [identifier],
+                    "countries": [],
+                    "publisherType": None,
+                    "asset": "USDT",
+                    "fiat": "DZD",
+                    "tradeType": "BUY",
+                }
+                body = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search",
+                    data=body,
+                    method="POST",
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 KR-Auction-Cars/1.0",
+                        "Accept": "application/json",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=8) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+
+                page_items = payload.get("data", [])
+                if not page_items:
+                    break
+
+                for item in page_items:
+                    ad = _normalize_binance_agent_ad(item)
+                    if ad:
+                        ads.append(ad)
+        except Exception:
+            pass
+
+    if not ads:
+        return None
+
+    # Remove exact duplicates returned across pages/endpoints.
+    unique = {}
+    for ad in ads:
+        key = (
+            round(ad["price"], 4),
+            round(ad["min_dzd"], 2),
+            round(ad["max_dzd"], 2),
+            round(ad["available_usdt"], 4),
+        )
+        unique[key] = ad
+    ads = list(unique.values())
+
+    market_lowest = min(ads, key=lambda x: x["price"])
+
+    compatible = []
+    if amount_usdt and amount_usdt > 0:
+        for ad in ads:
+            order_dzd = amount_usdt * ad["price"]
+            if ad["min_dzd"] and order_dzd < ad["min_dzd"]:
+                continue
+            if ad["max_dzd"] and order_dzd > ad["max_dzd"]:
+                continue
+            if ad["available_usdt"] and amount_usdt > ad["available_usdt"]:
+                continue
+            compatible.append(ad)
+
+    compatible_lowest = (
+        min(compatible, key=lambda x: x["price"])
+        if compatible
+        else None
+    )
+
+    return {
+        "market_lowest": market_lowest,
+        "compatible_lowest": compatible_lowest,
+        "payment_method": payment,
+        "count": len(ads),
+    }
 
 
 def calc_commission(price, kind, rate, min_fee, max_fee):
@@ -303,17 +457,27 @@ with st.sidebar:
         )
         binance_ad = None
     else:
-        binance_ad = get_binance_p2p_usdt_dzd(0.0)
-        if binance_ad:
+        binance_quote = get_binance_p2p_usdt_dzd(0.0)
+        if binance_quote:
+            binance_ad = binance_quote["market_lowest"]
             dzd_per_usdt = binance_ad["price"]
-            st.success(f"Binance P2P lowest BUY : 1 USDT ≈ {dzd_per_usdt:,.2f} DZD")
+            payment_name = binance_quote["payment_method"]["name"]
+            st.success(
+                f"Binance P2P live — {payment_name}: "
+                f"1 USDT ≈ {dzd_per_usdt:,.2f} DZD"
+            )
+            st.caption(
+                f"Prix le plus bas parmi {binance_quote['count']} annonce(s) inspectée(s). "
+                "Actualisation toutes les 30 secondes."
+            )
         else:
+            binance_ad = None
             st.warning("Binance P2P indisponible depuis Streamlit — fallback manuel.")
             dzd_per_usdt = st.number_input(
                 "DZD nécessaires pour acheter 1 USDT",
                 min_value=1.0,
-                value=250.0,
-                step=1.0,
+                value=253.5,
+                step=0.5,
                 key="dzd_usdt_fallback",
             )
 
@@ -407,8 +571,13 @@ with tab1:
     base_total_usdt = grand_total / krw_per_usdt
 
     # Find a Binance BUY rate compatible with the real amount.
-    compatible_binance = None if binance_manual else get_binance_p2p_usdt_dzd(base_total_usdt)
-    effective_dzd_rate = compatible_binance["price"] if compatible_binance else dzd_per_usdt
+    compatible_quote = None if binance_manual else get_binance_p2p_usdt_dzd(base_total_usdt)
+    compatible_binance = compatible_quote["compatible_lowest"] if compatible_quote else None
+    market_binance = compatible_quote["market_lowest"] if compatible_quote else None
+
+    # User preference: final DZD estimate always uses the cheapest Algeria Poste CCP
+    # price visible on Binance P2P. Compatibility is displayed separately.
+    effective_dzd_rate = market_binance["price"] if market_binance else dzd_per_usdt
     base_total_dzd = base_total_usdt * effective_dzd_rate
 
     st.subheader("📈 Marge")
@@ -435,7 +604,9 @@ with tab1:
     final_usdt = base_total_usdt + margin_usdt
 
     # Refresh P2P compatibility after adding margin.
-    final_binance = None if binance_manual else get_binance_p2p_usdt_dzd(final_usdt)
+    final_quote = None if binance_manual else get_binance_p2p_usdt_dzd(final_usdt)
+    final_binance = final_quote["market_lowest"] if final_quote else None
+    final_compatible = final_quote["compatible_lowest"] if final_quote else None
     if final_binance:
         effective_dzd_rate = final_binance["price"]
         base_total_dzd = base_total_usdt * effective_dzd_rate
@@ -467,9 +638,21 @@ with tab1:
 
     if final_binance and not binance_manual:
         st.caption(
-            f"Annonce Binance la moins chère compatible avec ~{final_usdt:,.0f} USDT : "
-            f"{effective_dzd_rate:,.2f} DZD/USDT · dispo ~{final_binance['available_usdt']:,.0f} USDT."
+            f"Binance P2P Algeria Poste CCP — meilleur prix marché : "
+            f"{effective_dzd_rate:,.2f} DZD/USDT."
         )
+        if final_compatible:
+            st.caption(
+                f"Meilleure annonce compatible avec ~{final_usdt:,.0f} USDT : "
+                f"{final_compatible['price']:,.2f} DZD/USDT · "
+                f"dispo ~{final_compatible['available_usdt']:,.0f} USDT."
+            )
+        else:
+            st.warning(
+                "L'annonce la moins chère sert au calcul comme demandé, mais aucune annonce inspectée "
+                "n'accepte à elle seule la totalité du montant. Il faudra probablement répartir l'achat "
+                "sur plusieurs annonces, avec un coût moyen potentiellement un peu supérieur."
+            )
 
     st.subheader("Détail")
     rows = [
@@ -546,7 +729,7 @@ with tab3:
 
 ### FX / USDT
 - **Upbit** est utilisé comme benchmark live pour USDT/KRW.
-- **Binance P2P** est utilisé pour estimer combien de DZD sont nécessaires pour **acheter les USDT**. L'app recherche les annonces BUY USDT / DZD et retient le **prix vendeur le plus bas compatible avec le montant**, avec fallback manuel si Binance bloque l'accès serveur.
+- **Binance P2P** est interrogé dynamiquement sur **BUY USDT / DZD + Algeria Poste CCP**. L'app affiche le **prix marché le plus bas** (celui visible en haut de la page Binance) et, séparément, le meilleur prix réellement compatible avec le montant de la voiture.
 - Un **bureau de change classique** de Séoul donne surtout un taux cash USD/EUR/KRW : ce n'est pas directement le même marché.
 - Pour un desk **OTC crypto**, utilise le taux net KRW réellement reçu par USDT et compare-le à Upbit.
 - L'app affiche automatiquement l'écart en % par rapport à Upbit quand tu saisis un taux OTC manuel.
